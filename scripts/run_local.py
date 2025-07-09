@@ -15,8 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Add src directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 
@@ -26,18 +26,16 @@ from src.translate.azure import translate_segments_async
 from src.summarize.gpt import summarize_translated_segments
 from src.export.docx import export_to_docx
 from src.export.pdf import export_to_pdf
+from src.utils.email import send_meeting_minutes
 from src.utils.helpers import (
     setup_logging,
+    timing_decorator,
     validate_environment,
     extract_video_id,
     create_output_directory,
-    save_metadata,
-    timing_decorator,
-    format_duration,
-    calculate_cost,
-    ProgressTracker
+    ProgressTracker,
+    save_metadata
 )
-from src.utils.email import send_meeting_minutes
 
 
 logger = logging.getLogger(__name__)
@@ -173,26 +171,32 @@ class VerbaPipeline:
         """Translate segments to Portuguese."""
         return await translate_segments_async(segments)
     
-    def _summarize_segments(self, segments: list):
+    def _summarize_segments(self, segments: list, video_duration: int, meeting_date: str, language_note: str):
         """Summarize segments with GPT."""
-        return summarize_translated_segments(segments)
+        return summarize_translated_segments(segments, video_duration, meeting_date, language_note)
     
     def _generate_docx(self, summary_result, meeting_title: Optional[str], output_dir: Path) -> str:
         """Generate DOCX document."""
         title = meeting_title or "Ata de Reunião"
-        docx_path = output_dir / "ata.docx"
-        return export_to_docx(summary_result, title, "Verba", docx_path)
+        company_name = "Verba"
+        docx_path = output_dir / f"{summary_result.slug}.docx"
+        return export_to_docx(summary_result, title, company_name, docx_path)
     
     def _generate_pdf(self, summary_result, meeting_title: Optional[str], output_dir: Path) -> str:
         """Generate PDF document."""
         title = meeting_title or "Ata de Reunião"
-        pdf_path = output_dir / "ata.pdf"
-        return export_to_pdf(summary_result, title, "Verba", pdf_path)
+        company_name = "Verba"
+        pdf_path = output_dir / f"{summary_result.slug}.pdf"
+        return export_to_pdf(summary_result, title, company_name, pdf_path)
     
     def _send_email(self, pdf_path: str, email_to: str, meeting_title: Optional[str]) -> bool:
         """Send email with PDF attachment."""
         title = meeting_title or "Ata de Reunião"
-        return send_meeting_minutes(pdf_path, email_to, title)
+        return send_meeting_minutes(
+            pdf_path=pdf_path,
+            to_email=email_to,
+            meeting_title=title
+        )
     
     def _add_step_metadata(self, step_name: str, result):
         """Add step metadata."""
