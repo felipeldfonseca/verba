@@ -50,7 +50,7 @@ class GPTSummarizer:
         self.api_key = api_key or os.getenv("AZURE_OPENAI_KEY")
         self.endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         self.deployment_name = deployment_name or os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
-        self.api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+        self.api_version = "2023-05-15"
         
         if not self.api_key:
             raise ValueError("Azure OpenAI API key is required")
