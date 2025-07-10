@@ -60,7 +60,7 @@ class AzureTranslator:
         
         # API configuration
         self.api_version = "3.0"
-        self.translate_url = f"{self.endpoint}/translator/text/v3.0/translate"
+        self.translate_url = f"{self.endpoint}/translate"
         self.detect_url = f"{self.endpoint}/detect"
         
         # Headers for API requests
