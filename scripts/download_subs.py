@@ -7,32 +7,31 @@ for processing by the Verba pipeline.
 """
 
 import argparse
+import json
+import logging
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 
 def download_subtitles(
-    video_url: str, 
-    output_dir: str = "tmp", 
+    video_url: str,
+    output_dir: str = "tmp",
     language: str = "en",
     video_id: Optional[str] = None
-) -> str:
+) -> Tuple[str, int]:
     """
-    Download subtitles from a YouTube video.
-    
+    Download subtitles from a YouTube video using yt-dlp.
+
     Args:
-        video_url: YouTube video URL
-        output_dir: Directory to save the subtitle file
-        language: Language code for subtitles (default: 'en')
-        video_id: Optional video ID for filename (extracted from URL if not provided)
-    
+        video_url: The URL of the YouTube video.
+        output_dir: The directory to save the subtitle file.
+        language: The language of the subtitles to download.
+        video_id: The ID of the video.
+
     Returns:
-        Path to the downloaded subtitle file
-        
-    Raises:
-        subprocess.CalledProcessError: If yt-dlp command fails
+        A tuple containing the path to the downloaded VTT file and the video duration in seconds.
     """
     output_path = Path(output_dir)
     output_path.mkdir(exist_ok=True)
@@ -46,10 +45,11 @@ def download_subtitles(
         else:
             video_id = "video"
     
-    output_template = str(output_path / f"{video_id}.%(ext)s")
-    
+    output_template = f"{output_path}/{video_id}.%(ext)s"
+    vtt_path = f"{output_path}/{video_id}.{language}.vtt"
+
     # yt-dlp command to download only subtitles
-    cmd = [
+    command = [
         "yt-dlp",
         "--write-auto-subs",
         "--sub-lang", language,
@@ -59,23 +59,38 @@ def download_subtitles(
     ]
     
     print(f"Downloading subtitles for {video_url}...")
-    print(f"Command: {' '.join(cmd)}")
+    print(f"Command: {' '.join(command)}")
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
         print(f"yt-dlp output: {result.stdout}")
         
         # Find the generated subtitle file
-        subtitle_file = output_path / f"{video_id}.{language}.vtt"
-        if subtitle_file.exists():
-            print(f"Subtitles downloaded successfully: {subtitle_file}")
-            return str(subtitle_file)
+        if Path(vtt_path).is_file():
+            print(f"Subtitles downloaded successfully: {vtt_path}")
+            # Command to get video metadata, including duration
+            info_command = [
+                "yt-dlp",
+                "--dump-single-json",
+                "--skip-download",
+                video_url
+            ]
+            try:
+                info_result = subprocess.run(info_command, capture_output=True, text=True, check=True)
+                video_info = json.loads(info_result.stdout)
+                duration = int(video_info.get("duration", 0))
+                print(f"Video duration: {duration} seconds")
+                return vtt_path, duration
+            except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
+                print(f"Failed to get video duration: {e}")
+                duration = 0
+            return vtt_path, duration
         else:
             # Try to find any .vtt file in the output directory
             vtt_files = list(output_path.glob("*.vtt"))
             if vtt_files:
                 print(f"Found subtitle file: {vtt_files[0]}")
-                return str(vtt_files[0])
+                return str(vtt_files[0]), 0 # Return 0 for duration if not found
             else:
                 raise FileNotFoundError(f"No subtitle file found in {output_path}")
                 
@@ -112,13 +127,14 @@ def main():
     args = parser.parse_args()
     
     try:
-        subtitle_file = download_subtitles(
+        subtitle_file, duration = download_subtitles(
             args.url, 
             args.output_dir, 
             args.language, 
             args.video_id
         )
         print(f"\nSuccess! Subtitle file saved as: {subtitle_file}")
+        print(f"Video duration: {duration} seconds")
         
     except Exception as e:
         print(f"Error: {e}")

@@ -13,7 +13,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,7 +34,9 @@ from src.utils.helpers import (
     extract_video_id,
     create_output_directory,
     ProgressTracker,
-    save_metadata
+    save_metadata,
+    calculate_cost,
+    format_duration
 )
 
 
@@ -101,8 +103,8 @@ class VerbaPipeline:
         try:
             # Step 1: Download subtitles
             progress.update(message="Downloading subtitles")
-            subtitle_file = self._download_subtitles(video_url, video_id, language)
-            self._add_step_metadata("download_subtitles", subtitle_file)
+            subtitle_file, video_duration = self._download_subtitles(video_url, video_id, language)
+            self._add_step_metadata("download_subtitles", {"path": subtitle_file, "duration": video_duration})
             
             # Step 2: Parse VTT file
             progress.update(message="Parsing subtitles")
@@ -116,7 +118,14 @@ class VerbaPipeline:
             
             # Step 4: Summarize with GPT
             progress.update(message="Generating summary with GPT-4o")
-            summary_result = self._summarize_segments(translated_segments)
+            meeting_date = datetime.now().strftime("%Y-%m-%d")
+            language_note = "Translated from English to Portuguese."
+            summary_result = self._summarize_segments(
+                translated_segments,
+                video_duration,
+                meeting_date,
+                language_note
+            )
             self._add_step_metadata("summarize_segments", {
                 "tokens_used": summary_result.tokens_used,
                 "processing_time": summary_result.processing_time
@@ -159,7 +168,7 @@ class VerbaPipeline:
             save_metadata(run_output_dir, self.metadata)
             raise
     
-    def _download_subtitles(self, video_url: str, video_id: str, language: str) -> str:
+    def _download_subtitles(self, video_url: str, video_id: str, language: str) -> Tuple[str, int]:
         """Download subtitles from YouTube."""
         return download_subtitles(video_url, str(self.tmp_dir), language, video_id)
     

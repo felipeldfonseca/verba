@@ -189,7 +189,7 @@ class DocxExporter:
         run.font.size = Pt(font_size)
         run.font.italic = italic
         run.font.bold = bold
-        para.alignment = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
+        para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
     
     def _add_bullet_point(self, doc: Document, text: str):
         """

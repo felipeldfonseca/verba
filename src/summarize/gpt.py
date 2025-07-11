@@ -8,10 +8,18 @@ Azure OpenAI GPT-4o with the canonical prompt specification.
 import asyncio
 import logging
 import os
+import re
+import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from openai import AzureOpenAI
+from src.utils.helpers import (
+    timing_decorator,
+    estimate_tokens,
+    load_config,
+    generate_slug
+)
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +34,8 @@ class SummaryResult:
     transcricao_completa: str
     tokens_used: int
     processing_time: float
+    title: str
+    slug: str
 
 
 class GPTSummarizer:
@@ -63,7 +73,8 @@ class GPTSummarizer:
             api_version=self.api_version,
             azure_endpoint=self.endpoint
         )
-    
+        self.max_tokens = 8192
+
     def _build_canonical_prompt(
         self,
         transcript_pt: str,
@@ -151,7 +162,6 @@ Duração da reunião: {duration_minutes} minutos.
         Returns:
             Tuple of (resumo, decisoes, proximas_acoes)
         """
-        import re
         
         # Extract resumo executivo
         resumo_match = re.search(r'### Resumo executivo\s*\n(.*?)(?=### |$)', response_text, re.DOTALL)
@@ -214,7 +224,6 @@ Duração da reunião: {duration_minutes} minutos.
         Returns:
             SummaryResult object
         """
-        import time
         
         start_time = time.time()
         
@@ -243,7 +252,9 @@ Duração da reunião: {duration_minutes} minutos.
             proximas_acoes=result[2],
             transcricao_completa=transcript_pt,
             tokens_used=result[3],
-            processing_time=processing_time
+            processing_time=processing_time,
+            title="", # Placeholder, will be populated later
+            slug="" # Placeholder, will be populated later
         )
     
     def _process_single_chunk(
@@ -371,6 +382,95 @@ Formate a resposta em:
             logger.error(f"Error in final summarization: {e}")
             raise
 
+    @timing_decorator
+    async def summarize(
+        self,
+        segments: List[Dict[str, Any]],
+        video_duration: int,
+        meeting_date: str,
+        language_note: str
+    ) -> SummaryResult:
+        """
+        Summarize a list of translated segments using GPT.
+
+        Args:
+            segments: A list of translated segments.
+            video_duration: The duration of the video in seconds.
+            meeting_date: The date of the meeting.
+            language_note: A note about the translation language.
+
+        Returns:
+            A SummaryResult object containing the summary.
+        """
+        full_transcript = " ".join([seg['text'] for seg in segments])
+        
+        prompt = self._build_prompt(full_transcript, video_duration, meeting_date, language_note)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=self.max_tokens,
+                temperature=0.3
+            )
+            
+            summary_text = response.choices[0].message.content
+            tokens_used = response.usage.total_tokens
+
+            title_match = re.search(r"^\s*Título:\s*(.*)", summary_text, re.MULTILINE)
+            title = title_match.group(1).strip() if title_match else "Ata de Reunião"
+            slug = generate_slug(title)
+
+            return SummaryResult(
+                resumo_executivo=summary_text, # Changed to response_text as per new_code
+                decisoes=[], # Placeholder, needs actual parsing
+                proximas_acoes=[], # Placeholder, needs actual parsing
+                transcricao_completa=full_transcript,
+                tokens_used=tokens_used,
+                processing_time=0, # This will be updated by timing_decorator
+                title=title,
+                slug=slug
+            )
+            
+        except Exception as e:
+            logger.error(f"Error summarizing segments: {e}")
+            raise
+
+    def _build_prompt(self, transcript: str, duration: int, date: str, lang_note: str) -> str:
+        """Build the prompt for the GPT model."""
+        
+        duration_str = f"{duration // 60} minutos"
+        
+        prompt = f"""
+        **Objective:** Generate a concise, professional meeting minutes document in Brazilian Portuguese from the provided transcript.
+
+        **Context:**
+        - **Video Duration:** {duration_str}
+        - **Meeting Date:** {date}
+        - **Language Note:** {lang_note}
+
+        **Input Transcript:**
+        ---
+        {transcript}
+        ---
+
+        **Instructions:**
+        Analyze the transcript and produce a structured meeting minutes document with the following sections:
+        
+        1.  **Título (Title):** Create a short, descriptive title for the meeting.
+        2.  **Visão Geral (Overview):** A brief, one-paragraph summary of the meeting's main purpose and key outcomes.
+        3.  **Principais Tópicos Discutidos (Main Topics Discussed):** A bulleted list of the most important subjects covered.
+        4.  **Decisões Chave (Key Decisions):** A bulleted list of any significant decisions made.
+        5.  **Itens de Ação (Action Items):** A numbered list of tasks assigned, including who is responsible (if mentioned).
+        6.  **Principais Citações (Key Quotes):** A few impactful or representative quotes from the discussion.
+
+        **Format:**
+        - Use clear headings for each section.
+        - Ensure the output is well-organized and easy to read.
+        - The entire output must be in Brazilian Portuguese.
+        """
+        return prompt
+
 
 def summarize_meeting(
     transcript_pt: str,
@@ -397,33 +497,22 @@ def summarize_meeting(
 
 
 def summarize_translated_segments(
-    segments: List[Dict],
-    meeting_date: Optional[str] = None,
-    language_note: str = ""
+    segments: List[Dict[str, Any]],
+    video_duration: int,
+    meeting_date: str,
+    language_note: str
 ) -> SummaryResult:
     """
-    Summarize translated segments from the pipeline.
-    
+    High-level function to summarize translated segments.
+
     Args:
-        segments: List of translated segments
-        meeting_date: Meeting date in ISO format (defaults to today)
-        language_note: Optional language note
+        segments: A list of dictionaries, where each dictionary represents a translated segment.
+        video_duration: The duration of the video in seconds.
+        meeting_date: The date of the meeting.
+        language_note: A note about the translation language.
         
     Returns:
-        SummaryResult object
+        A SummaryResult object.
     """
-    # Build transcript from translated segments
-    transcript_pt = ""
-    for segment in segments:
-        text = segment.get("text_translated", segment.get("text", ""))
-        if text:
-            start_time = segment.get("start", "00:00:00")
-            transcript_pt += f"[{start_time}] {text}\n"
-    
-    # Calculate duration
-    duration_minutes = 0
-    if segments:
-        max_end_seconds = max(segment.get("end_seconds", 0) for segment in segments)
-        duration_minutes = int(max_end_seconds / 60)
-    
-    return summarize_meeting(transcript_pt, duration_minutes, meeting_date, language_note) 
+    summarizer = GPTSummarizer()
+    return asyncio.run(summarizer.summarize(segments, video_duration, meeting_date, language_note)) 
